@@ -233,7 +233,7 @@ agents:
     # The model family the adapter can be asked for (claude, openai, any)
     # and the keys a host entry may set for it (the config's hosts table).
     serves: openai
-    settings: []
+    settings: [openrouter_fallback]
     host: codex
     supports_native_git: false
     # Auth comes from ~/.codex/auth.json (ChatGPT login) or CODEX_API_KEY;

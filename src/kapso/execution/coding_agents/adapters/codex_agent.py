@@ -29,6 +29,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from kapso.core.openrouter_fallback import codex_overrides, fallback_settings, is_quota_error
 from kapso.execution.inbox import new_requests_for_session
 from kapso.execution.coding_agents.session_record import record_run, start_run
 from kapso.execution.coding_agents.transcripts import CODEX_EVENT_HEAD, CODEX_HOST, events, stream_lines
@@ -272,6 +273,8 @@ class CodexCodingAgent(CodingAgentInterface):
         self._inbox_stop_grace_seconds: float = (
             float(spec["inbox_stop_grace_seconds"]) if self._inbox_path else 0.0
         )
+        # hosts.codex.openrouter_fallback, validated; empty when off.
+        self._fallback: Dict[str, Any] = fallback_settings(spec.get("openrouter_fallback"))
         self._thread_id: Optional[str] = None
         self._workspace: str = ""
         if not shutil.which("codex"):
@@ -372,13 +375,27 @@ class CodexCodingAgent(CodingAgentInterface):
         )
         result: Optional[CodingResult] = None
         try:
-            result = self._run_session_turn(model, tail, prompt, timeout)
+            result = self._run_session_turn(model, tail, prompt, timeout, [])
         finally:
             record_run(recorder, result, sys.exc_info()[1])
+        if self._fallback and not result.success and is_quota_error(result.error):
+            # The subscription is spent: the same turn once more on OpenRouter (ZDR only).
+            model = self._fallback["model"]
+            print(f"[codex] subscription quota or rate limit hit; retrying on OpenRouter {model}", flush=True)
+            self._thread_id = None
+            recorder = start_run(
+                CODEX_HOST, model, self._session_record_path, self._stream_artifact_path,
+                reason="openrouter_fallback", deadline_seconds=timeout,
+            )
+            result = None
+            try:
+                result = self._run_session_turn(model, tail, prompt, timeout, codex_overrides(self._fallback))
+            finally:
+                record_run(recorder, result, sys.exc_info()[1])
         return result
 
     def _run_session_turn(
-        self, model: str, tail: List[str], prompt: str, timeout: float
+        self, model: str, tail: List[str], prompt: str, timeout: float, provider: List[str]
     ) -> CodingResult:
         last_fd, last_path = tempfile.mkstemp(prefix="codex_agent_", suffix=".last")
         os.close(last_fd)
@@ -395,7 +412,8 @@ class CodexCodingAgent(CodingAgentInterface):
             stream_file = open(stream_path, "w")
             persist_stream = False
 
-        cmd = self._exec_command(model, last_path) + tail
+        # Exec options precede `resume`, so the provider's go before the tail.
+        cmd = self._exec_command(model, last_path) + provider + tail
 
         env = os.environ.copy()
         # OPENAI_API_KEY passes through: the CLI's billing is pinned to the

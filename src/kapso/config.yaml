@@ -33,6 +33,15 @@ hosts:
   codex:
     model: "gpt-5.6-sol"
     effort: "xhigh"              # OpenAI's reasoning ceiling
+    # A session that fails on the subscription's quota or rate limit runs once
+    # more on OpenRouter, forced to ZDR endpoints with no provider fallback
+    # (core/openrouter_fallback.py). Also the update crew's workers. Off by default.
+    openrouter_fallback:
+      enabled: false
+      base_url: "https://openrouter.ai/api/v1"
+      api_key_env: "OPENROUTER_API_KEY"   # read by Codex, never by Kapso
+      model: "openai/gpt-5.6-sol"         # an OpenRouter slug with a ZDR endpoint
+      timeout_seconds: 900
 
 # =============================================================================
 # Inference — every non-embedding completion runs through the configured
